@@ -20,7 +20,7 @@ An intelligent PDF analysis and question-answering system built with Streamlit, 
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/zenitsu0509/AI-PDF-QA-Bot.git
 cd AI-PDF-QA-Bot
 ```
 
