@@ -16,8 +16,6 @@ from langchain.prompts import PromptTemplate
 # Qdrant client
 import qdrant_client
 
-# --- Helper Functions ---
-
 @st.cache_resource(show_spinner="Loading PDF...")
 def load_and_split_pdf(pdf_file):
     """Loads PDF, extracts text, and splits it into chunks."""
