@@ -83,9 +83,6 @@ If you encounter the "no running event loop" error, run the application with:
 streamlit run app.py --server.fileWatcherType none
 ```
 
-## License
-
-[Your chosen license]
 
 ## Contributing
 
