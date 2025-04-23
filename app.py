@@ -2,14 +2,17 @@ import streamlit as st
 import os
 import tempfile
 import graphviz
+import io
+import base64
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 
-# LangChain components
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Qdrant
-from langchain_community.embeddings import HuggingFaceEmbeddings # More specific import
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 
@@ -128,8 +131,11 @@ def render_flowchart(dot_code):
 
     try:
         # Use st.graphviz_chart to render directly in Streamlit
+        graph = graphviz.Source(dot_code) # Create the Source object
         st.graphviz_chart(dot_code)
-        return True # Indicate success
+        # Store the *Source object* itself for download
+        st.session_state.graph_object = graph
+        return True
     except graphviz.backend.execute.CalledProcessError as e:
         st.error(f"Graphviz rendering error: {e}. Please ensure Graphviz is installed and in your system PATH.")
         st.code(dot_code, language='dot') # Show the code that failed
@@ -164,6 +170,56 @@ def setup_qa_chain(_llm, _vector_store):
     )
     return qa_chain
 
+# --- Download Functions ---
+def download_text_button(text_content, filename, button_text="Download Text"):
+    """Creates a download button for text content."""
+    # Create a download button
+    b64 = base64.b64encode(text_content.encode()).decode()
+    href = f'<a href="data:file/txt;base64,{b64}" download="{filename}" style="text-decoration:none;">'\
+           f'<button style="background-color:#4CAF50;color:white;padding:8px 15px;'\
+           f'border:none;border-radius:5px;cursor:pointer;">{button_text}</button></a>'
+    return href
+
+def get_image_download_link(graph, filename="flowchart.png", format="png", button_text="Download Flowchart"):
+    """Generate a download link for the rendered graph using graph.pipe()."""
+    if not isinstance(graph, graphviz.Source):
+         st.error("Invalid graph object provided for download.")
+         return "<p>Error: Cannot generate download link for invalid graph object.</p>"
+    try:
+        # Use graph.pipe() to get the image bytes directly
+        # Ensure the format requested is supported by graphviz (png, svg, pdf, etc.)
+        img_bytes = graph.pipe(format=format)
+
+        if not img_bytes:
+            st.error("Graphviz returned empty output. Cannot create download link.")
+            return "<p>Error: Graphviz rendering failed (empty output).</p>"
+
+        # Base64 encode the image data
+        b64 = base64.b64encode(img_bytes).decode()
+        mime_type = f"image/{format}" # Adjust mime type based on format if needed
+        href = f'<a href="data:{mime_type};base64,{b64}" download="{filename}" '\
+              f'style="text-decoration:none;"><button style="background-color:#4CAF50;'\
+              f'color:white;padding:8px 15px;border:none;border-radius:5px;cursor:pointer;">'\
+              f'{button_text}</button></a>'
+        return href
+    except graphviz.backend.execute.CalledProcessError as e:
+        # Handle potential errors if graphviz executable isn't found or has issues
+        st.error(f"Graphviz execution error during download link generation: {e}")
+        return f"<p>Error creating download link: Graphviz execution failed ({e}).</p>"
+    except Exception as e:
+        st.error(f"Unexpected error creating download link: {e}")
+        return f"<p>Error creating download link: {e}</p>"
+
+def download_chat_history(chat_history, filename="chat_history.json"):
+    """Creates a download button for chat history in JSON format."""
+    # Convert chat history to JSON
+    json_str = json.dumps(chat_history, indent=2)
+    b64 = base64.b64encode(json_str.encode()).decode()
+    href = f'<a href="data:file/json;base64,{b64}" download="{filename}" style="text-decoration:none;">'\
+           f'<button style="background-color:#4CAF50;color:white;padding:8px 15px;'\
+           f'border:none;border-radius:5px;cursor:pointer;">Download Chat History</button></a>'
+    return href
+
 # --- Main App Logic ---
 
 # Load API Key
@@ -189,7 +245,9 @@ if "pdf_processed" not in st.session_state:
     st.session_state.summary = None
     st.session_state.dot_code = None
     st.session_state.flowchart_rendered = False
-
+    st.session_state.graph_object = None
+    st.session_state.chat_history = []
+    st.session_state.pdf_name = "document.pdf"  # Initialize with a default value
 
 # --- Sidebar for PDF Upload and LLM selection ---
 with st.sidebar:
@@ -231,6 +289,13 @@ if process_button and uploaded_file:
     st.session_state.summary = None
     st.session_state.dot_code = None
     st.session_state.flowchart_rendered = False
+    st.session_state.graph_object = None
+    st.session_state.chat_history = []
+    # Store the filename
+    if uploaded_file and hasattr(uploaded_file, 'name'):
+        st.session_state.pdf_name = uploaded_file.name
+    else:
+        st.session_state.pdf_name = "document.pdf"  # Fallback name
 
     # Load, split, and embed
     texts, full_text = load_and_split_pdf(uploaded_file)
@@ -268,19 +333,43 @@ if st.session_state.pdf_processed:
         st.subheader("📄 Summary")
         if st.session_state.summary:
             st.info(st.session_state.summary)
+            
+            # Create a timestamp-based filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_basename = os.path.splitext(st.session_state.pdf_name)[0]
+            summary_filename = f"{pdf_basename}_summary_{timestamp}.txt"
+            
+            # Add download button
+            st.markdown(download_text_button(st.session_state.summary, summary_filename, "Download Summary"), unsafe_allow_html=True)
         else:
             st.warning("Summary could not be generated.")
 
     with col2:
         st.subheader("📊 Flowchart / Structure")
+        # Render flowchart if not already rendered
         if 'flowchart_rendered' not in st.session_state or not st.session_state.flowchart_rendered:
             st.session_state.flowchart_rendered = render_flowchart(st.session_state.dot_code) # Attempt rendering
 
-        # Add a button to show raw DOT code if rendering failed or user wants to see it
+        # Add download button for flowchart if it was rendered successfully
+        if st.session_state.flowchart_rendered and st.session_state.graph_object:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_basename = os.path.splitext(st.session_state.pdf_name)[0]
+            flowchart_filename = f"{pdf_basename}_flowchart_{timestamp}.png"
+            
+            # Make sure to render the download button
+            st.markdown(get_image_download_link(st.session_state.graph_object, flowchart_filename), unsafe_allow_html=True)
+
+        # Add a button to show and download raw DOT code if available
         if st.session_state.dot_code and st.session_state.dot_code not in ["NO_FLOWCHART", "ERROR_GENERATING_DOT"]:
             exp = st.expander("Show Flowchart DOT Code")
             with exp:
-                 st.code(st.session_state.dot_code, language='dot')
+                st.code(st.session_state.dot_code, language='dot')
+                
+                # Download button for DOT code
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pdf_basename = os.path.splitext(st.session_state.pdf_name)[0]
+                dot_filename = f"{pdf_basename}_flowchart_{timestamp}.dot"
+                st.markdown(download_text_button(st.session_state.dot_code, dot_filename, "Download DOT Code"), unsafe_allow_html=True)
 
 
     st.markdown("---")
@@ -294,16 +383,34 @@ if st.session_state.pdf_processed:
             with st.spinner("Thinking..."):
                 try:
                     response = st.session_state.qa_chain.invoke({"query": user_question})
+                    answer = response.get("result", "Sorry, I couldn't find an answer.")
+                    
+                    # Add Q&A to chat history
+                    st.session_state.chat_history.append({
+                        "question": user_question,
+                        "answer": answer,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    })
+                    
                     st.info("Answer:")
-                    st.write(response.get("result", "Sorry, I couldn't find an answer.")) # Access result key
+                    st.write(answer)
 
-                    # Optionally display source documents if enabled in qa_chain
-                    # if 'source_documents' in response:
-                    #     with st.expander("Show relevant text chunks"):
-                    #         for doc in response['source_documents']:
-                    #             st.write(f"- {doc.page_content[:200]}...") # Display snippet
                 except Exception as e:
                     st.error(f"Error getting answer: {e}")
+        
+        # Display chat history
+        if st.session_state.chat_history:
+            st.subheader("Chat History")
+            for i, qa in enumerate(st.session_state.chat_history):
+                st.markdown(f"**Q{i+1}: {qa['question']}**")
+                st.markdown(f"*A: {qa['answer']}*")
+                st.markdown("---")
+            
+            # Add download button for chat history
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pdf_basename = os.path.splitext(st.session_state.pdf_name)[0]
+            chat_filename = f"{pdf_basename}_chat_history_{timestamp}.json"
+            st.markdown(download_chat_history(st.session_state.chat_history, chat_filename), unsafe_allow_html=True)
     else:
         st.warning("QA system not initialized. Please process a PDF first.")
 
