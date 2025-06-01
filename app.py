@@ -143,7 +143,7 @@ def render_flowchart(dot_code):
     except Exception as e:
         st.error(f"An unexpected error occurred during flowchart rendering: {e}")
         st.code(dot_code, language='dot')
-        return False # Indicate failure
+        return False 
 
 def setup_qa_chain(_llm, _vector_store):
     """Sets up the RetrievalQA chain."""
