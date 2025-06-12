@@ -1,2 +1,9 @@
 streamlit
 langchain-groq
+langchain
+langchain-community
+pypdf
+qdrant-client
+sentence-transformers
+python-dotenv
+graphviz
